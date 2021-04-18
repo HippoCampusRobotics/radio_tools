@@ -1,0 +1,17 @@
+<library path="src">
+    <class name="RadioConfigurator" type="radio_tools.radio_rqt_plugin.RadioConfiguratorPlugin" base_class_type="rqt_gui_py::Plugin">
+        <description>
+            Tool to configure SiK 433MHz RF modules.
+        </description>
+        <qtgui>
+            <group>
+                <label>Radio</label>
+                <icon type="theme">network-transmit</icon>
+            </group>
+
+            <label>Radio Configurator</label>
+            <icon type="theme">emblem-system</icon>
+        </qtgui>
+    </class>
+
+</library>
