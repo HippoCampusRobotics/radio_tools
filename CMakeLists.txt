@@ -22,6 +22,11 @@ catkin_package(
 #  DEPENDS system_lib
 )
 
+catkin_install_python(PROGRAMS
+  scripts/upload_firmware.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
 install(DIRECTORY
   resource
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}

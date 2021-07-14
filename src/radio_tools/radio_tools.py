@@ -66,6 +66,105 @@ class Firmware(object):
         return self.ranges
 
 
+class HippoLinkUploader(object):
+    CONFIG_SEQUENCE = b"+++++"
+    BOOTLOADER_SEQUENCE = b"FLASH\r\n"
+
+    def __init__(self, port=None, baud=57600):
+
+        if port:
+            self.port = serial.Serial(port, baudrate=baud)
+        else:
+            self.port = serial.Serial()
+        self.baud = baud
+        self.port.timeout = 0.2
+        self.fw_uploader = FirmwareUploader(port=self.port)
+
+    def set_port(self, port):
+        self.port.port = port
+        self.port.baudrate = self.baud
+        self.port.open()
+
+    def _parse_ok(self, bytes):
+        if len(bytes) < 4:
+            return False
+        if b"OK" in bytes[-4:]:
+            return True
+        return False
+
+    def read_until_ok(self, tries=3):
+        success = False
+        while tries > 0 and not success:
+            bytes = self.port.read_until(b"OK\r\n")
+            if len(bytes) > 0:
+                success = self._parse_ok(bytes)
+                if not success:
+                    tries -= 1
+            else:
+                tries -= 1
+        self.port.reset_input_buffer()
+        return success
+
+    def enter_at_mode(self, retries=3):
+        success = False
+        while True:
+            time.sleep(0.2)
+            self.port.reset_input_buffer()
+            self.port.write(self.CONFIG_SEQUENCE)
+            self.port.flush()
+            time.sleep(0.2)
+            success = self.read_until_ok()
+            if success:
+                self.port.flushInput()
+                return success
+            retries -= 1
+            if retries == 0:
+                self.port.flushInput()
+                return False
+
+    def enter_bootloader(self):
+        self.port.write(b"\r\n")
+        self.port.flush()
+        time.sleep(0.2)
+        self.port.reset_input_buffer()
+        self.port.write(self.BOOTLOADER_SEQUENCE)
+        self.port.flush()
+        time.sleep(1.0)
+        success = self.read_until_ok()
+        self.port.reset_input_buffer()
+        return success
+
+    def upload_firmware(self,
+                        path,
+                        program_progress_cb=None,
+                        verify_progress_cb=None):
+        if not self.enter_at_mode():
+            pass
+        if not self.enter_bootloader():
+            pass
+        self.fw_uploader.set_program_progress_callback(program_progress_cb)
+        self.fw_uploader.set_verify_progress_callback(verify_progress_cb)
+        baud = self.port.baudrate
+        timeout = self.port.timeout
+        self.port.timeout = 3.0
+        firmware = Firmware(path)
+        time.sleep(0.7)
+
+        success = False
+        try:
+            self.fw_uploader.upload(firmware)
+        except RuntimeError as e:
+            print("{}".format(e))
+            raise e
+            success = False
+        else:
+            success = True
+        finally:
+            self.port.baudrate = baud
+            self.port.timeout = timeout
+        return success
+
+
 class FirmwareUploader(object):
     NOP = 0x00
     OK = 0x10
@@ -111,7 +210,6 @@ class FirmwareUploader(object):
             data = bytearray([data])
         except TypeError:
             data = bytearray(data)
-        print("Sending: {}".format(data))
         self.port.write(data)
 
     def _get_sync(self):
@@ -120,12 +218,10 @@ class FirmwareUploader(object):
             txt = ("Sync failed. Expected INSYNC=0x{:02X} but got "
                    "0x{:02X}.".format(self.INSYNC, c))
             raise RuntimeError(txt)
-        print("insync")
         c = self._read()
         if c != self.OK:
             raise RuntimeError("Sync failed. Expected OK=0x{:02X} but got "
                                "0x{:02X}.".format(self.OK, c))
-        print("ok")
 
     def _sync(self):
         self.send([self.NOP] * (self.PROG_MULTI_MAX * 2))
@@ -143,15 +239,10 @@ class FirmwareUploader(object):
             self._get_sync()
 
     def _set_address(self, address, banking):
-        print("Adress: {} {}".format(address & 0xFF, (address >> 8) & 0xFF))
         data = bytearray()
         if banking:
             if self.BANK_PROGRAMING != (address >> 16):
                 self.BANK_PROGRAMMING = address >> 16
-                if self.BANK_PROGRAMING == 0:
-                    print("HOME")
-                else:
-                    print("BANK", self.BANK_PROGRAMMING)
             data = [
                 self.LOAD_ADDRESS, address & 0xFF, (address >> 8) & 0xFF,
                 (address >> 16) & 0xFF, self.EOC
@@ -172,7 +263,6 @@ class FirmwareUploader(object):
     def _program_multi(self, data):
         sync_count = 0
         while len(data):
-            print("prog_multi: {}".format(sync_count))
             n = min(len(data), self.PROG_MULTI_MAX)
             block = data[:n]
             block = data[:n]
@@ -276,22 +366,17 @@ class FirmwareUploader(object):
         self.port.baudrate = self.bootloader_baud
         self.port.reset_input_buffer()
         self.port.flush()
-        print("Checking bootloader")
         if not self.check_bootloader():
             raise RuntimeError("Failed to contact bootloader")
-        print("Identify board")
         board_id, board_freq = self.identify()
         if firmware.banking_detected and not (board_id & 0x80):
             raise RuntimeError("This firmware requires a CPU with banking.")
         if (board_id & 0x80):
             firmware.banking_detected = True
-        print("Erasing")
         self._erase(erase_params=erase_params)
-        print("Programming")
         self._program(firmware)
-        print("Verifying")
         self._verify(firmware)
-        print("Rebooting")
+        time.sleep(0.5)
         self._reboot()
 
 
@@ -388,7 +473,6 @@ class Configurator(object):
 
         success = False
         try:
-            print("hello")
             uploader.upload(firmware)
         except RuntimeError as e:
             print("{}".format(e))
